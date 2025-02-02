@@ -1,5 +1,5 @@
-transformers 
-streamlit
-torch
-diffusers
-tokeniszer
+pip install transformers 
+pip install streamlit
+pip install torch
+pip install diffusers
+pip install tokeniszer
