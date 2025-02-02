@@ -1,5 +1,6 @@
 import streamlit as st
 from transformers import AutoTokenizer, AutoModelForCausalLM
+from huggingface_hub import login
 import os
 
 # Set page configuration
@@ -10,12 +11,14 @@ offload_folder = "./offload"
 if not os.path.exists(offload_folder):
     os.makedirs(offload_folder)
 
-# Load Hugging Face models for text generation
+# Authenticate with Hugging Face using your provided API token
+login("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")
+
+# Load the model (GPT-2 or another model)
 @st.cache_resource(ttl=3600)  # Cache models for 1 hour
 def load_models():
     try:
-        # Load LLaMA 2 model (ensure you use the correct LLaMA 2 model from Hugging Face)
-        model_name = "meta-llama/Llama-2-7b-hf"  # LLaMA 2 model (you can choose other variants like 13b)
+        model_name = "gpt2"  # Fallback model (Replace with any preferred model)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         model = AutoModelForCausalLM.from_pretrained(model_name)
         
@@ -26,7 +29,7 @@ def load_models():
         st.error(f"Error loading models: {e}")
         return None, None
 
-# Function to generate blog content using LLaMA 2
+# Function to generate blog content based on the topic, word count, and target audience
 def generate_blog_content(topic, word_count, target_audience):
     model, tokenizer = load_models()
 
@@ -34,51 +37,53 @@ def generate_blog_content(topic, word_count, target_audience):
         return "Sorry, I couldn't generate personalized content at this time."
 
     try:
-        # Dynamically create a prompt based on the user's input parameters
+        # Set the prompt to give proper context to the model
         prompt = (
-            f"Write a detailed blog post about '{topic}', tailored to {target_audience}. "
-            f"The post should be engaging, informative, and relevant, covering aspects such as the history, culture, "
-            f"landmarks, traditions, food, and places of interest related to '{topic}'. The tone should be professional, "
-            f"but also accessible to {target_audience}. The content should be at least {word_count} words long and must focus "
-            f"solely on '{topic}', avoiding unrelated information."
+            f"Write a blog post about '{topic}', with a focus on providing relevant, "
+            f"informative, and engaging content for a {target_audience} audience."
         )
 
-        # Tokenize the prompt and generate content using sampling to reduce repetition
+        # Tokenize the prompt and generate the content
         inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1024)
         
-        # Parameters to control generation: temperature for creativity, top_k for reducing repetition
+        # Generate the text with the model
         output = model.generate(
             inputs["input_ids"],
-            max_length=word_count * 5,  # Multiply word count by 5 for token length
-            num_return_sequences=1,  # Return a single sequence
-            do_sample=True,  # Enable sampling to improve randomness
-            temperature=0.7,  # Control randomness (lower = more deterministic)
-            top_k=50,  # Limit the number of top options to sample from
-            top_p=0.95,  # Nucleus sampling: cumulative probability threshold
-            no_repeat_ngram_size=2,  # Prevent n-grams of size 2 from repeating
-            pad_token_id=tokenizer.eos_token_id  # Ensure padding is handled correctly
+            max_length=min(word_count * 5, 1024),  # Ensure we don't exceed token limit
+            num_return_sequences=1,  # Return only one generated sequence
+            do_sample=True,  # Enable sampling to allow more creative output
+            temperature=0.7,  # Allow a bit more creativity and variation
+            top_k=50,  # Limit the number of top options
+            top_p=0.9,  # Use nucleus sampling for better coherence
+            no_repeat_ngram_size=2,  # Avoid repeating n-grams in the text
+            pad_token_id=tokenizer.eos_token_id  # Padding token to handle tokenization
         )
         
+        # Decode the output tokens to text
         generated_text = tokenizer.decode(output[0], skip_special_tokens=True)
 
-        # Clean up the generated text (e.g., removing unwanted intro text)
-        if "Write a" in generated_text:
-            generated_text = generated_text.split("Write a", 1)[-1]
+        # Remove the initial prompt to avoid repetition in the output
+        if generated_text.startswith(prompt):
+            generated_text = generated_text[len(prompt):].strip()
 
-        # Ensure the content is as close to the desired word count as possible
+        # Clean the generated text to ensure it stays on-topic
+        if topic.lower() not in generated_text.lower():
+            generated_text = f"Sorry, the content does not match the topic '{topic}'."
+
+        # Ensure the word count is respected
         word_list = generated_text.split()
         generated_word_count = len(word_list)
 
-        # If the content is too short, append more content until we reach the word count
+        # If content is too short, extend it
         while generated_word_count < word_count:
             extra_content = model.generate(
                 inputs["input_ids"],
-                max_length=(word_count * 5) + 200,  # Allow more tokens to keep adding content
+                max_length=min((word_count * 5) + 200, 1024),  # Allow for more tokens
                 num_return_sequences=1,
                 do_sample=True,
                 temperature=0.7,
                 top_k=50,
-                top_p=0.95,
+                top_p=0.9,
                 no_repeat_ngram_size=2,
                 pad_token_id=tokenizer.eos_token_id
             )
@@ -87,7 +92,7 @@ def generate_blog_content(topic, word_count, target_audience):
             word_list = generated_text.split()
             generated_word_count = len(word_list)
 
-        # Cut the content to the exact word count
+        # Trim to the exact word count if necessary
         generated_text = " ".join(word_list[:word_count])
 
         return generated_text
