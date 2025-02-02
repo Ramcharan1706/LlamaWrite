@@ -1,0 +1,5 @@
+transformers 
+streamlit
+torch
+diffusers
+tokeniszer
