@@ -14,8 +14,8 @@ if not os.path.exists(offload_folder):
 @st.cache_resource(ttl=3600)  # Cache models for 1 hour
 def load_models():
     try:
-        # Load GPT-2 or another suitable model for content generation
-        model_name = "gpt2"  # Can be replaced with other models like 't5-large' for different results
+        # Load LLaMA 2 model (ensure you use the correct LLaMA 2 model from Hugging Face)
+        model_name = "meta-llama/Llama-2-7b-hf"  # LLaMA 2 model (you can choose other variants like 13b)
         tokenizer = AutoTokenizer.from_pretrained(model_name)
         model = AutoModelForCausalLM.from_pretrained(model_name)
         
@@ -26,24 +26,25 @@ def load_models():
         st.error(f"Error loading models: {e}")
         return None, None
 
-# Function to generate blog content using GPT-2 or other transformer models
-def generate_blog_content(topic, word_count):
+# Function to generate blog content using LLaMA 2
+def generate_blog_content(topic, word_count, target_audience):
     model, tokenizer = load_models()
 
     if model is None:
         return "Sorry, I couldn't generate personalized content at this time."
 
     try:
-        # Create a general prompt based on the provided topic
+        # Dynamically create a prompt based on the user's input parameters
         prompt = (
-            f"Write a detailed and engaging blog post about '{topic}'. "
-            f"The post should be informative and interesting, providing key insights, facts, or tips related to {topic}. "
-            f"Ensure the tone is professional yet approachable. "
-            f"Make the content at least {word_count} words long, with an engaging introduction, informative body, and a thought-provoking conclusion."
+            f"Write a detailed blog post about '{topic}', tailored to {target_audience}. "
+            f"The post should be engaging, informative, and relevant, covering aspects such as the history, culture, "
+            f"landmarks, traditions, food, and places of interest related to '{topic}'. The tone should be professional, "
+            f"but also accessible to {target_audience}. The content should be at least {word_count} words long and must focus "
+            f"solely on '{topic}', avoiding unrelated information."
         )
-        
+
         # Tokenize the prompt and generate content using sampling to reduce repetition
-        inputs = tokenizer(prompt, return_tensors="pt", max_length=1024, truncation=True)
+        inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=1024)
         
         # Parameters to control generation: temperature for creativity, top_k for reducing repetition
         output = model.generate(
@@ -59,15 +60,15 @@ def generate_blog_content(topic, word_count):
         )
         
         generated_text = tokenizer.decode(output[0], skip_special_tokens=True)
-        
+
         # Clean up the generated text (e.g., removing unwanted intro text)
         if "Write a" in generated_text:
             generated_text = generated_text.split("Write a", 1)[-1]
-        
+
         # Ensure the content is as close to the desired word count as possible
         word_list = generated_text.split()
         generated_word_count = len(word_list)
-        
+
         # If the content is too short, append more content until we reach the word count
         while generated_word_count < word_count:
             extra_content = model.generate(
@@ -85,7 +86,7 @@ def generate_blog_content(topic, word_count):
             generated_text += " " + additional_text
             word_list = generated_text.split()
             generated_word_count = len(word_list)
-        
+
         # Cut the content to the exact word count
         generated_text = " ".join(word_list[:word_count])
 
@@ -100,11 +101,15 @@ def main():
     st.title("Blog Content Generator")
 
     topic = st.text_input("Enter Blog Topic:")  # User can input any topic here
-    word_count = st.number_input("Enter desired word count:", min_value=50, max_value=10000, value=1000)
+    word_count = st.number_input("Enter desired word count:", min_value=50, max_value=10000, value=500)
+    target_audience = st.selectbox(
+        "Select Target Audience:",
+        ["general readers", "professionals", "students", "researchers", "content creators"]
+    )
 
     if topic:
         if st.button("Generate Blog"): 
-            blog_content = generate_blog_content(topic, word_count)
+            blog_content = generate_blog_content(topic, word_count, target_audience)
             if blog_content:
                 st.subheader("Generated Blog Post:")
                 st.write(blog_content)
