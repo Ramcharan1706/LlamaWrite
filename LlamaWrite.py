@@ -1,129 +1,116 @@
 import streamlit as st
-from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
+from transformers import AutoTokenizer, AutoModelForCausalLM
 import os
-from diffusers import StableDiffusionPipeline
-import torch
 
-# Set page configuration first
-st.set_page_config(page_title="AI Blog Generator")
+# Set page configuration
+st.set_page_config(page_title="Blog Content Generator")
 
 # Ensure offload folder exists for large models
 offload_folder = "./offload"
 if not os.path.exists(offload_folder):
     os.makedirs(offload_folder)
 
-# Function to login to Hugging Face using your token (No need for user input now)
-def login_to_huggingface():
+# Load Hugging Face models for text generation
+@st.cache_resource(ttl=3600)  # Cache models for 1 hour
+def load_models():
     try:
-        # No token input required, automatically login if already authenticated in your environment
-        st.write("Logged in to Hugging Face successfully.")
-    except Exception as e:
-        st.error(f"Error logging in to Hugging Face: {e}")
-
-# Call the login function before loading models
-login_to_huggingface()
-
-# Use GPT-2 model for text generation
-model_name = "gpt2"  # Public GPT-2 model
-
-@st.cache_resource(ttl=3600)  # Cache for 1 hour
-def load_model():
-    try:
-        # Load tokenizer and model for text generation
+        # Load GPT-2 or another suitable model for content generation
+        model_name = "gpt2"  # Can be replaced with other models like 't5-large' for different results
         tokenizer = AutoTokenizer.from_pretrained(model_name)
+        model = AutoModelForCausalLM.from_pretrained(model_name)
         
-        # Offloading to disk to help with memory
-        model = AutoModelForCausalLM.from_pretrained(
-            model_name, 
-            device_map="auto", 
-            offload_folder=offload_folder,
-            low_cpu_mem_usage=True  # Helps reduce memory usage
+        st.write(f"Model {model_name} loaded successfully.")
+        return model, tokenizer
+
+    except Exception as e:
+        st.error(f"Error loading models: {e}")
+        return None, None
+
+# Function to generate blog content using GPT-2 or other transformer models
+def generate_blog_content(topic, word_count):
+    model, tokenizer = load_models()
+
+    if model is None:
+        return "Sorry, I couldn't generate personalized content at this time."
+
+    try:
+        # Create a general prompt based on the provided topic
+        prompt = (
+            f"Write a detailed and engaging blog post about '{topic}'. "
+            f"The post should be informative and interesting, providing key insights, facts, or tips related to {topic}. "
+            f"Ensure the tone is professional yet approachable. "
+            f"Make the content at least {word_count} words long, with an engaging introduction, informative body, and a thought-provoking conclusion."
         )
         
-        return pipeline("text-generation", model=model, tokenizer=tokenizer)
-    except Exception as e:
-        st.error(f"Error loading model: {e}")
-        return None
-
-# Load model with Streamlit caching
-generator = load_model()
-
-# Function to generate images using Hugging Face's Stable Diffusion
-@st.cache_resource(ttl=3600)  # Cache for 1 hour
-def load_stable_diffusion_model():
-    try:
-        # Load Stable Diffusion model
-        pipe = StableDiffusionPipeline.from_pretrained("stabilityai/stable-diffusion-2")
+        # Tokenize the prompt and generate content using sampling to reduce repetition
+        inputs = tokenizer(prompt, return_tensors="pt", max_length=1024, truncation=True)
         
-        # Ensure the device is selected based on availability of GPU
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        pipe = pipe.to(device)
+        # Parameters to control generation: temperature for creativity, top_k for reducing repetition
+        output = model.generate(
+            inputs["input_ids"],
+            max_length=word_count * 5,  # Multiply word count by 5 for token length
+            num_return_sequences=1,  # Return a single sequence
+            do_sample=True,  # Enable sampling to improve randomness
+            temperature=0.7,  # Control randomness (lower = more deterministic)
+            top_k=50,  # Limit the number of top options to sample from
+            top_p=0.95,  # Nucleus sampling: cumulative probability threshold
+            no_repeat_ngram_size=2,  # Prevent n-grams of size 2 from repeating
+            pad_token_id=tokenizer.eos_token_id  # Ensure padding is handled correctly
+        )
         
-        # Log to inform the user about the device being used
-        st.write(f"Stable Diffusion model loaded on {device.upper()}.")
-        return pipe
+        generated_text = tokenizer.decode(output[0], skip_special_tokens=True)
+        
+        # Clean up the generated text (e.g., removing unwanted intro text)
+        if "Write a" in generated_text:
+            generated_text = generated_text.split("Write a", 1)[-1]
+        
+        # Ensure the content is as close to the desired word count as possible
+        word_list = generated_text.split()
+        generated_word_count = len(word_list)
+        
+        # If the content is too short, append more content until we reach the word count
+        while generated_word_count < word_count:
+            extra_content = model.generate(
+                inputs["input_ids"],
+                max_length=(word_count * 5) + 200,  # Allow more tokens to keep adding content
+                num_return_sequences=1,
+                do_sample=True,
+                temperature=0.7,
+                top_k=50,
+                top_p=0.95,
+                no_repeat_ngram_size=2,
+                pad_token_id=tokenizer.eos_token_id
+            )
+            additional_text = tokenizer.decode(extra_content[0], skip_special_tokens=True)
+            generated_text += " " + additional_text
+            word_list = generated_text.split()
+            generated_word_count = len(word_list)
+        
+        # Cut the content to the exact word count
+        generated_text = " ".join(word_list[:word_count])
+
+        return generated_text
+
     except Exception as e:
-        st.error(f"Error loading image generation model: {e}")
-        return None
+        st.error(f"Error generating content: {e}")
+        return "Sorry, I couldn't generate personalized content at this time."
 
-# Load stable diffusion model
-stable_diffusion_model = load_stable_diffusion_model()
-
-def generate_blog_content(topic, word_count):
-    with st.spinner("Generating content..."):
-        try:
-            prompt = f"Write a detailed blog about {topic}. This tool is a game-changer for content creators, researchers, and professionals alike."
-            # Increase max_length to generate a larger blog
-            # Be mindful of token limits (GPT-2 has a max token length of 1024 for GPT-2)
-            max_tokens = min(word_count * 7, 1024)  # Limit by GPT-2's token count
-            result = generator(prompt, max_length=max_tokens, do_sample=True)  # Generate the content
-            generated_text = result[0]['generated_text']
-            return generated_text
-        except Exception as e:
-            st.error(f"Error generating content: {e}")
-            return "Sorry, I couldn't generate any content at this time."
-
-# Function to generate image based on blog topic using Stable Diffusion
-def generate_image_from_topic(blog_content):
-    try:
-        # Generate an image based on the blog content or topic
-        prompt = f"Create an artistic illustration related to the blog: {blog_content[:100]}..."  # Use a portion of the blog for a prompt
-        image = stable_diffusion_model(prompt=prompt).images[0]
-        return image
-    except Exception as e:
-        st.error(f"Error generating image: {e}")
-        return None
-
+# Main Streamlit interface
 def main():
-    st.title("AI Blog Generator")
-    
-    topic = st.text_input("Enter Blog Topic:")
-    word_count = st.number_input("Enter desired word count:", min_value=50, max_value=10000, value=1000)  # Increased max value
+    st.title("Blog Content Generator")
+
+    topic = st.text_input("Enter Blog Topic:")  # User can input any topic here
+    word_count = st.number_input("Enter desired word count:", min_value=50, max_value=10000, value=1000)
 
     if topic:
         if st.button("Generate Blog"): 
-            if generator:
-                # Generate blog content based on the topic and word count
-                blog_content = generate_blog_content(topic, word_count)
-                if blog_content:
-                    st.subheader("Generated Blog Post:")
-                    st.write(blog_content)
-                    
-                    # Display the word count of the generated blog post
-                    generated_word_count = len(blog_content.split())
-                    st.write(f"Word Count: {generated_word_count}")
-                else:
-                    st.warning("Blog content was not generated.")
-                
-                # Generate image based on the generated blog content
-                image = generate_image_from_topic(blog_content)
-                if image:
-                    st.subheader("Related Image:")
-                    st.image(image, use_column_width=True)
-                else:
-                    st.warning("Could not generate image for this topic.")
+            blog_content = generate_blog_content(topic, word_count)
+            if blog_content:
+                st.subheader("Generated Blog Post:")
+                st.write(blog_content)
+                st.write(f"Word Count: {len(blog_content.split())}")
             else:
-                st.error("Failed to load model. Please try again.")
+                st.warning("Blog content was not generated.")
     else:
         st.warning("Please enter a topic to generate a blog.")
 
